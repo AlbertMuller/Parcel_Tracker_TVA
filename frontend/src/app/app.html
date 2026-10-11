@@ -1,0 +1,26 @@
+<a class="skip-link" href="#main-content" (click)="$event.preventDefault(); mainContent.focus()"
+  >Skip to content</a
+>
+<header class="topbar">
+  <a class="brand" routerLink="/orders"
+    ><span class="brand-icon" aria-hidden="true"
+      ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+        <path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z M3 8l9 5 9-5 M12 13v8 M7.5 5.5l9 5v4" /></svg></span
+    ><span>Order Tracker<span class="brand-caption">OPERATIONS WORKSPACE</span></span></a
+  >
+  <nav aria-label="Main navigation">
+    <a
+      routerLink="/orders"
+      routerLinkActive="active"
+      ariaCurrentWhenActive="page"
+      [routerLinkActiveOptions]="{ exact: true }"
+      >Orders</a
+    >
+    <a routerLink="/orders/new" routerLinkActive="active" ariaCurrentWhenActive="page">New order</a>
+  </nav>
+  <span class="workspace-label">Purchase order management</span>
+</header>
+<main #mainContent id="main-content" class="container" tabindex="-1"><router-outlet /></main>
+<footer class="site-footer">
+  <span>Order Tracker</span><span>From purchase to fulfilment.</span>
+</footer>

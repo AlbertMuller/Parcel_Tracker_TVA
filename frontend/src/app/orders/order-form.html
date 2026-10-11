@@ -1,0 +1,197 @@
+<div class="page-header">
+  <div>
+    <p class="eyebrow">LET'S GET THINGS MOVING</p>
+    <h1>New order</h1>
+    <p class="page-description">Add customer details and items to get started.</p>
+  </div>
+  <a class="btn" routerLink="/orders">Back to orders</a>
+</div>
+
+<form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+  @if (problem(); as p) {
+    <div class="alert alert-error" role="alert">
+      <strong>{{ p.title }}</strong>
+      @if (p.detail) {
+        <div>{{ p.detail }}</div>
+      }
+      @if (p.existingOrderId) {
+        <div class="alert-actions">
+          <a [routerLink]="['/orders', p.existingOrderId]"
+            >View order #{{ p.existingOrderNumber }}</a
+          >
+          <button type="button" class="btn btn-small" (click)="regenerateReference()">
+            Use a new reference
+          </button>
+        </div>
+      }
+    </div>
+  }
+
+  <section class="card">
+    <h2><span class="section-number">01</span> Order details</h2>
+    <div class="grid">
+      <label class="field span-2">
+        External reference
+        <div class="input-row">
+          <input formControlName="externalReference" class="mono" autocomplete="off" />
+          <button
+            type="button"
+            class="btn"
+            (click)="regenerateReference()"
+            title="Generate a new reference"
+          >
+            New
+          </button>
+        </div>
+        <span class="hint">
+          Identifies this order. If you're not sure a submission went through, submit again with the
+          same reference: it won't create a duplicate.
+        </span>
+        @for (msg of errorsFor(form.controls.externalReference, 'externalReference'); track msg) {
+          <span class="error">{{ msg }}</span>
+        }
+      </label>
+
+      <label class="field">
+        Customer name
+        <input formControlName="customerName" autocomplete="off" />
+        @for (msg of errorsFor(form.controls.customerName, 'customer.name'); track msg) {
+          <span class="error">{{ msg }}</span>
+        }
+      </label>
+
+      <label class="field">
+        Customer email
+        <input formControlName="customerEmail" type="email" autocomplete="off" />
+        @for (msg of errorsFor(form.controls.customerEmail, 'customer.email'); track msg) {
+          <span class="error">{{ msg }}</span>
+        }
+      </label>
+
+      <label class="field">
+        Currency
+        <app-currency-select
+          formControlName="currency"
+          [options]="currencies()"
+          ariaLabel="Currency"
+        />
+        @for (msg of errorsFor(form.controls.currency, 'currency'); track msg) {
+          <span class="error">{{ msg }}</span>
+        }
+      </label>
+
+      <label class="field span-2">
+        <span>Notes <span class="muted">(optional)</span></span>
+        <textarea formControlName="notes" rows="2"></textarea>
+        @for (msg of errorsFor(form.controls.notes, 'notes'); track msg) {
+          <span class="error">{{ msg }}</span>
+        }
+      </label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2><span class="section-number">02</span> Line items</h2>
+    @for (msg of errorsFor(lineItems, 'lineItems'); track msg) {
+      <div class="error">{{ msg }}</div>
+    }
+    <div class="table-wrap">
+      <table class="table lines" formArrayName="lineItems">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Name</th>
+            <th class="num">Qty</th>
+            <th class="num">Unit price</th>
+            <th class="num">Line total (est.)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (line of lineItems.controls; track line; let i = $index) {
+            <tr [formGroupName]="i">
+              <td>
+                <input formControlName="sku" class="mono" aria-label="SKU" />
+                @for (msg of errorsFor(line.controls.sku, 'lineItems[' + i + '].sku'); track msg) {
+                  <span class="error">{{ msg }}</span>
+                }
+              </td>
+              <td>
+                <input formControlName="name" aria-label="Item name" />
+                @for (
+                  msg of errorsFor(line.controls.name, 'lineItems[' + i + '].name');
+                  track msg
+                ) {
+                  <span class="error">{{ msg }}</span>
+                }
+              </td>
+              <td class="num">
+                <input
+                  formControlName="quantity"
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="num"
+                  aria-label="Quantity"
+                />
+                @for (
+                  msg of errorsFor(line.controls.quantity, 'lineItems[' + i + '].quantity');
+                  track msg
+                ) {
+                  <span class="error">{{ msg }}</span>
+                }
+              </td>
+              <td class="num">
+                <input
+                  formControlName="unitPrice"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  class="num"
+                  aria-label="Unit price"
+                />
+                @for (
+                  msg of errorsFor(line.controls.unitPrice, 'lineItems[' + i + '].unitPrice');
+                  track msg
+                ) {
+                  <span class="error">{{ msg }}</span>
+                }
+              </td>
+              <td class="num">{{ estimate().lines[i] | currency: currencyCode() }}</td>
+              <td>
+                <button
+                  type="button"
+                  class="btn btn-small"
+                  (click)="removeLine(i)"
+                  [disabled]="lineItems.length === 1"
+                  aria-label="Remove line"
+                >
+                  ✕
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4">
+              <button type="button" class="btn btn-small" (click)="addLine()">+ Add line</button>
+            </td>
+            <td class="num">
+              <strong>{{ estimate().total | currency: currencyCode() }}</strong>
+            </td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <p class="hint">Review your items and estimated total before submitting.</p>
+  </section>
+
+  <div class="form-actions">
+    <a class="btn" routerLink="/orders">Back to orders</a>
+    <button type="submit" class="btn btn-primary" [disabled]="submitting()">
+      {{ submitting() ? 'Submitting…' : 'Submit order' }}
+    </button>
+  </div>
+</form>

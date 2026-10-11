@@ -1,0 +1,247 @@
+<div class="page-header">
+  <div>
+    <p class="eyebrow">ORDER OVERVIEW</p>
+    <h1>
+      @if (order(); as o) {
+        Order #{{ o.number }}
+      } @else {
+        Order
+      }
+    </h1>
+    <p class="page-description">The details, progress and history of your order.</p>
+  </div>
+  <a class="btn" routerLink="/orders">Back to orders</a>
+</div>
+
+@if (loadError(); as e) {
+  <div class="alert alert-error">
+    <strong>{{ e.title }}</strong>
+    @if (e.detail) {
+      <div>{{ e.detail }}</div>
+    }
+  </div>
+}
+
+@switch (notice()) {
+  @case ('created') {
+    <div class="alert alert-success">Order submitted successfully.</div>
+  }
+  @case ('already-submitted') {
+    <div class="alert alert-info">
+      <strong>This order was already submitted.</strong>
+      A previous submission with the same reference went through, so no duplicate was created. This
+      is the existing order.
+    </div>
+  }
+  @case ('currency-changed') {
+    <div class="alert alert-success">
+      Order re-priced in {{ order()?.currency }} at the latest exchange rate.
+    </div>
+  }
+}
+
+@if (order(); as o) {
+  <section class="card">
+    <div class="summary">
+      <div>
+        <div class="label">Reference</div>
+        <div class="mono">{{ o.externalReference }}</div>
+      </div>
+      <div>
+        <div class="label">Customer</div>
+        <div>{{ o.customer.name }}</div>
+        <div class="muted small">{{ o.customer.email }}</div>
+      </div>
+      <div>
+        <div class="label">Status</div>
+        <app-status-badge [status]="o.status" />
+      </div>
+      <div>
+        <div class="label">Submitted</div>
+        <div>{{ o.createdAt | date: 'medium' }}</div>
+      </div>
+      <div>
+        <div class="label">Last updated</div>
+        <div>{{ o.updatedAt | date: 'medium' }}</div>
+      </div>
+    </div>
+    @if (o.notes) {
+      <div class="notes"><span class="label">Notes</span> {{ o.notes }}</div>
+    }
+  </section>
+
+  <section class="card">
+    <h2>Status</h2>
+    @if (actionError(); as e) {
+      <div class="alert alert-error" role="alert">
+        <strong>{{ e.title }}</strong>
+        @if (e.detail) {
+          <div>{{ e.detail }}</div>
+        }
+      </div>
+    }
+    @if (o.allowedTransitions.length) {
+      <div class="actions">
+        @for (s of o.allowedTransitions; track s) {
+          <button
+            type="button"
+            class="btn"
+            [class.btn-primary]="s !== 'Cancelled'"
+            [class.btn-danger]="s === 'Cancelled'"
+            [disabled]="busy()"
+            (click)="changeStatus(s)"
+          >
+            {{ actionLabel(s) }}
+          </button>
+        }
+      </div>
+    } @else {
+      <p class="muted">
+        This order is {{ o.status.toLowerCase() }}. No further status changes are possible.
+      </p>
+    }
+    <ol class="history">
+      @for (h of o.statusHistory; track $index) {
+        <li>
+          <app-status-badge [status]="h.to" />
+          <span class="muted small">{{ h.at | date: 'medium' }}</span>
+        </li>
+      }
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>Currency</h2>
+    <p>
+      Priced in <strong>{{ o.currency }}</strong>
+      @if (isConverted()) {
+        <span class="muted">&nbsp;· converted from the original {{ o.baseCurrency }} prices</span>
+      }
+    </p>
+
+    @if (currencyError(); as e) {
+      <div class="alert alert-error" role="alert">
+        <strong>{{ e.title }}</strong>
+        @if (e.detail) {
+          <div>{{ e.detail }}</div>
+        }
+      </div>
+    }
+
+    @if (o.canChangeCurrency) {
+      <div class="input-row currency-row">
+        <app-currency-select
+          [options]="targetOptions()"
+          [value]="targetCurrency()"
+          (valueChange)="selectCurrency($event)"
+          placeholder="Convert to…"
+          ariaLabel="Convert to currency"
+        />
+        <button
+          type="button"
+          class="btn btn-primary"
+          [disabled]="!preview() || busy()"
+          (click)="convert()"
+        >
+          Convert
+        </button>
+      </div>
+      @if (previewLoading()) {
+        <p class="hint">Fetching the latest rate…</p>
+      }
+      @if (preview(); as p) {
+        <div class="preview">
+          @if (p.source) {
+            <div>
+              1 {{ o.baseCurrency }} = <strong>{{ p.rate }} {{ p.currency }}</strong>
+              <span class="muted small"
+                >&nbsp;· {{ p.source }}, {{ p.date | date: 'mediumDate' }}</span
+              >
+              @if (p.isStale) {
+                <span class="error">Live rates are unavailable; this is the last known rate.</span>
+              }
+            </div>
+          } @else {
+            <div>Back to the original {{ o.baseCurrency }} prices.</div>
+          }
+          <div>
+            New total: <strong>{{ p.total | currency: p.currency }}</strong>
+            <span class="muted small">(currently {{ o.total | currency: o.currency }})</span>
+          </div>
+        </div>
+      }
+      <p class="hint">
+        Prices are converted from the original {{ o.baseCurrency }} prices at the latest exchange
+        rate. The currency is locked once the order is confirmed.
+      </p>
+    } @else {
+      <p class="muted">
+        The currency is locked because this order is {{ o.status.toLowerCase() }}. Prices can only
+        be converted while an order is Pending.
+      </p>
+    }
+
+    @if (o.currencyHistory.length) {
+      <ol class="history">
+        @for (c of o.currencyHistory; track $index) {
+          <li>
+            <span
+              >{{ c.from }} → <strong>{{ c.to }}</strong></span
+            >
+            <span class="muted small">
+              1 {{ o.baseCurrency }} = {{ c.rateFromBase }} {{ c.to }} (rate of
+              {{ c.rateDate | date: 'mediumDate' }}) ·
+              {{ c.at | date: 'medium' }}
+            </span>
+          </li>
+        }
+      </ol>
+    }
+  </section>
+
+  <section class="card">
+    <h2>Line items</h2>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Name</th>
+            <th class="num">Qty</th>
+            @if (isConverted()) {
+              <th class="num">Original price</th>
+            }
+            <th class="num">Unit price</th>
+            <th class="num">Line total</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (l of o.lineItems; track $index) {
+            <tr>
+              <td class="mono">{{ l.sku }}</td>
+              <td>{{ l.name }}</td>
+              <td class="num">{{ l.quantity }}</td>
+              @if (isConverted()) {
+                <td class="num muted">{{ l.baseUnitPrice | currency: o.baseCurrency }}</td>
+              }
+              <td class="num">{{ l.unitPrice | currency: o.currency }}</td>
+              <td class="num">{{ l.lineTotal | currency: o.currency }}</td>
+            </tr>
+          }
+        </tbody>
+        <tfoot>
+          <tr>
+            <td [attr.colspan]="isConverted() ? 5 : 4" class="num">Subtotal</td>
+            <td class="num">{{ o.subtotal | currency: o.currency }}</td>
+          </tr>
+          <tr class="total">
+            <td [attr.colspan]="isConverted() ? 5 : 4" class="num">Total ({{ o.currency }})</td>
+            <td class="num">{{ o.total | currency: o.currency }}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+} @else if (!loadError()) {
+  <p class="muted">Loading…</p>
+}

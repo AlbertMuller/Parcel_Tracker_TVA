@@ -1,0 +1,26 @@
+name: order-tracker
+
+services:
+  api:
+    build:
+      context: ./backend
+    image: order-tracker-api:latest
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Swagger__Enabled: "true"
+    ports:
+      - "${API_PORT:-8081}:8080"   # Swagger UI at http://localhost:8081/swagger
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+    image: order-tracker-web:latest
+    environment:
+      API_UPSTREAM: http://api:8080
+    ports:
+      - "${WEB_PORT:-8080}:8080"   # UI at http://localhost:8080
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

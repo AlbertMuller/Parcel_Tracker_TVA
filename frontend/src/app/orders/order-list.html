@@ -1,0 +1,186 @@
+<div class="page-header">
+  <div>
+    <p class="eyebrow">YOUR OPERATIONS, IN ORDER</p>
+    <h1>Orders</h1>
+    <p class="page-description">Every order. Every update. All in one place.</p>
+  </div>
+  <a class="btn btn-primary" routerLink="/orders/new">+ New order</a>
+</div>
+
+<section class="orders-panel" aria-label="Order directory">
+  <div class="panel-heading">
+    <div>
+      <h2>Order directory</h2>
+      <p class="hint">Track progress from submission to fulfilment.</p>
+    </div>
+    <span class="panel-tag">Newest first</span>
+  </div>
+  <div class="toolbar">
+    <label>
+      Status
+      <select [value]="status()" (change)="onStatusChange($any($event.target).value)">
+        <option value="">All statuses</option>
+        @for (s of statuses; track s) {
+          <option [value]="s">{{ s }}</option>
+        }
+      </select>
+    </label>
+    <label class="grow">
+      Search
+      <input
+        type="search"
+        placeholder="Reference, customer name or email"
+        [value]="search()"
+        (input)="onSearch($any($event.target).value)"
+      />
+    </label>
+    <label class="currency-filter">
+      Show totals in
+      <app-currency-select
+        [options]="currencies()"
+        [value]="displayCurrency()"
+        (valueChange)="onDisplayCurrencyChange($event)"
+        emptyLabel="Order currency"
+        ariaLabel="Show totals in"
+      />
+    </label>
+    <button type="button" class="btn" [disabled]="loading()" (click)="refresh()">Refresh</button>
+    @if (search() || status()) {
+      <button type="button" class="btn btn-small" (click)="clearFilters()">Clear filters</button>
+    }
+  </div>
+
+  @if (ratesError()) {
+    <div class="alert alert-error" role="alert">
+      Exchange rates could not be loaded, so totals are shown in each order's own currency.
+    </div>
+  }
+
+  @if (error(); as e) {
+    <div class="alert alert-error" role="alert">
+      <strong>{{ e.title }}</strong>
+      @if (e.detail) {
+        <div>{{ e.detail }}</div>
+      }
+    </div>
+  }
+
+  <p class="result-count muted" role="status" aria-live="polite">
+    @if (loading()) {
+      Loading…
+    } @else {
+      {{ totalCount() }} order{{ totalCount() === 1 ? '' : 's'
+      }}{{ search() || status() ? ' matching your filters' : ' in your workspace' }}
+    }
+  </p>
+
+  @if (!loading() && orders().length === 0 && !error()) {
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">&#9638;</span>
+      @if (search() || status()) {
+        <h2>No matching orders</h2>
+        <p>Try a different reference, customer or status.</p>
+        <button type="button" class="btn" (click)="clearFilters()">Clear filters</button>
+      } @else {
+        <h2>A fresh start for your orders</h2>
+        <p>Create your first purchase order and follow its progress here.</p>
+        <a class="btn btn-primary" routerLink="/orders/new">+ Create your first order</a>
+      }
+    </div>
+  } @else if (!loading() && !error()) {
+    <div class="table-wrap">
+      <table class="table clickable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Reference</th>
+            <th>Customer</th>
+            <th class="num">Lines</th>
+            <th class="num">Total</th>
+            @if (displayRates(); as r) {
+              <th class="num">≈ {{ r.base }}</th>
+            }
+            <th>Status</th>
+            <th>Submitted</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (o of orders(); track o.id) {
+            <tr (click)="open(o)">
+              <td>{{ o.number }}</td>
+              <td class="mono">
+                <a
+                  class="order-link"
+                  [routerLink]="['/orders', o.id]"
+                  (click)="$event.stopPropagation()"
+                  >{{ o.externalReference }}</a
+                >
+              </td>
+              <td>
+                {{ o.customerName }}
+                <div class="muted small">{{ o.customerEmail }}</div>
+              </td>
+              <td class="num">{{ o.lineCount }}</td>
+              <td class="num">{{ o.total | currency: o.currency }}</td>
+              @if (displayRates(); as r) {
+                <td class="num">
+                  @if (converted(o); as value) {
+                    {{ value | currency: r.base }}
+                  } @else if (o.total === 0) {
+                    {{ 0 | currency: r.base }}
+                  } @else {
+                    <span class="muted small">no rate</span>
+                  }
+                </td>
+              }
+              <td><app-status-badge [status]="o.status" /></td>
+              <td class="date-cell">
+                {{ o.createdAt | date: 'mediumDate' }}
+                <div class="muted small">{{ o.createdAt | date: 'shortTime' }}</div>
+              </td>
+            </tr>
+          }
+        </tbody>
+        @if (displayRates(); as r) {
+          @if (convertedTotal(); as t) {
+            <tfoot>
+              <tr class="total">
+                <td colspan="5" class="num">Total of listed orders</td>
+                <td class="num">{{ t.sum | currency: r.base }}</td>
+                <td colspan="2"></td>
+              </tr>
+            </tfoot>
+          }
+        }
+      </table>
+    </div>
+    @if (pageCount() > 1) {
+      <nav class="pagination" aria-label="Order pages">
+        <span class="muted small">Page {{ page() }} of {{ pageCount() }}</span>
+        <div class="actions">
+          <button class="btn btn-small" [disabled]="page() === 1" (click)="goToPage(page() - 1)">
+            Previous</button
+          ><button
+            class="btn btn-small"
+            [disabled]="page() >= pageCount()"
+            (click)="goToPage(page() + 1)"
+          >
+            Next
+          </button>
+        </div>
+      </nav>
+    }
+    @if (displayRates(); as r) {
+      <p class="hint">
+        Converted at {{ r.source }} rates of {{ r.date | date: 'mediumDate' }}, for reference only.
+        Orders keep their own currency.
+        @if (r.isStale) {
+          Live rates are unavailable, so these are the last known rates.
+        }
+        @if (convertedTotal()?.skipped) {
+          {{ convertedTotal()?.skipped }} order(s) have no rate and are left out of the total.
+        }
+      </p>
+    }
+  }
+</section>
