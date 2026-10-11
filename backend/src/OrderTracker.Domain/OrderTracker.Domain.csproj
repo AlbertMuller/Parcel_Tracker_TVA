@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The domain model. No package or project references: it depends on nothing. -->
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OrderTracker.Domain.UnitTests" />
+  </ItemGroup>
+
+</Project>

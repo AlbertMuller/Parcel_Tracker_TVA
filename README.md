@@ -7,7 +7,8 @@ same order reference twice never creates a duplicate.
 - **Database:** PostgreSQL in Docker, created by an init script, with the schema applied by a one-shot migration container
 - **Frontend:** Angular 21 (standalone components, signals, reactive forms)
 
-See [SOLUTION.md](SOLUTION.md) for design decisions and trade-offs.
+See [SOLUTION.md](SOLUTION.md) for design decisions and trade-offs. Requirements, design and the signed-off backlog
+are in [docs/](docs/).
 
 ## Prerequisites
 
@@ -17,6 +18,7 @@ See [SOLUTION.md](SOLUTION.md) for design decisions and trade-offs.
 | Node.js | 20.19+, 22.12+ or 24+ |
 | npm | 10+ |
 | Docker | With Compose v2: runs PostgreSQL, and the database tests use it via Testcontainers |
+| IDE (optional) | Visual Studio 2026 (18.0+), Rider 2025.3+ or VS Code with C# Dev Kit. **Visual Studio 2022 can't load .NET 10 projects**; the SDK requires MSBuild 18 |
 
 ## Run locally
 
@@ -89,7 +91,8 @@ The setup:
 ## Run the tests
 
 ```bash
-# Backend: unit tests + PostgreSQL tests (Docker must be running; Testcontainers starts a throwaway Postgres)
+# Backend: domain, application, architecture, integration and API tests
+# (Docker must be running: Testcontainers starts a throwaway Postgres)
 cd backend
 dotnet test
 
@@ -153,14 +156,14 @@ Status and currency history are append-only. A unique index on `orders.normalize
 guard against duplicate orders. Check constraints enforce positive quantities, non-negative prices, valid
 statuses and currency codes.
 
-Migrations live in [backend/src/OrderTracker.Api/Infrastructure/Persistence/Migrations](backend/src/OrderTracker.Api/Infrastructure/Persistence/Migrations).
+Migrations live in [backend/src/OrderTracker.Infrastructure/Persistence/Migrations](backend/src/OrderTracker.Infrastructure/Persistence/Migrations).
 To change the schema:
 
 ```bash
 cd backend
 dotnet tool restore
-dotnet ef migrations add <Name> --project src/OrderTracker.Api --output-dir Infrastructure/Persistence/Migrations
-dotnet ef migrations script --project src/OrderTracker.Api --idempotent   # review the SQL
+dotnet ef migrations add <Name> --project src/OrderTracker.Infrastructure --startup-project src/OrderTracker.Api --output-dir Persistence/Migrations
+dotnet ef migrations script --project src/OrderTracker.Infrastructure --startup-project src/OrderTracker.Api --idempotent   # review the SQL
 ```
 
 To connect with psql: `docker compose exec db psql -U postgres -d ordertracker`.
@@ -170,13 +173,18 @@ To connect with psql: `docker compose exec db psql -U postgres -d ordertracker`.
 ```
 backend/
   OrderTracker.sln
-  src/OrderTracker.Api/
-    Domain/           Order, status rules, pricing, normalization  (pure, no ASP.NET)
-    Application/      OrderService (use cases), CreateOrderValidator
-    Infrastructure/   Persistence/ (EF Core DbContext, Postgres repository, migrations), exchange rates, error handling
-    Contracts/        Request / response DTOs
-    Endpoints/        HTTP mapping (status codes, problem details)
-  tests/OrderTracker.Tests/   Unit tests (in-memory fake repository) and Postgres/ tests (Testcontainers)
+  Directory.Build.props                  shared settings (net10.0, nullable, warnings as errors)
+  src/
+    OrderTracker.Domain/                 Order aggregate, value objects, status policy, events, errors (no dependencies)
+    OrderTracker.Application/            use-case handlers, validator, DTOs, ports, exchange-rate cache, event handlers
+    OrderTracker.Infrastructure/         EF Core + PostgreSQL (repository, unit of work, queries, migrations), Frankfurter
+    OrderTracker.Api/                    endpoints, request contracts, Error → ProblemDetails, composition root
+  tests/
+    OrderTracker.Domain.UnitTests/       aggregate, value objects, policy, fingerprint
+    OrderTracker.Application.UnitTests/  use cases against an in-memory store
+    OrderTracker.IntegrationTests/       PostgreSQL (Testcontainers) and HTTP API tests
+    OrderTracker.ArchitectureTests/      enforces the dependency rule between layers
+    OrderTracker.TestKit/                shared fakes and test data
 docker/postgres/init/        Database init script (roles and privileges)
 frontend/
   src/app/orders/     list, form and detail pages, API client, models

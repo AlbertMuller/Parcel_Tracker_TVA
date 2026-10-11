@@ -3,9 +3,16 @@
 # ---- build: restore (cached layer) then copy sources ----
 FROM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
 WORKDIR /src
-COPY global.json OrderTracker.sln ./
+COPY global.json Directory.Build.props OrderTracker.sln ./
+COPY src/OrderTracker.Domain/OrderTracker.Domain.csproj src/OrderTracker.Domain/
+COPY src/OrderTracker.Application/OrderTracker.Application.csproj src/OrderTracker.Application/
+COPY src/OrderTracker.Infrastructure/OrderTracker.Infrastructure.csproj src/OrderTracker.Infrastructure/
 COPY src/OrderTracker.Api/OrderTracker.Api.csproj src/OrderTracker.Api/
-COPY tests/OrderTracker.Tests/OrderTracker.Tests.csproj tests/OrderTracker.Tests/
+COPY tests/OrderTracker.TestKit/OrderTracker.TestKit.csproj tests/OrderTracker.TestKit/
+COPY tests/OrderTracker.Domain.UnitTests/OrderTracker.Domain.UnitTests.csproj tests/OrderTracker.Domain.UnitTests/
+COPY tests/OrderTracker.Application.UnitTests/OrderTracker.Application.UnitTests.csproj tests/OrderTracker.Application.UnitTests/
+COPY tests/OrderTracker.IntegrationTests/OrderTracker.IntegrationTests.csproj tests/OrderTracker.IntegrationTests/
+COPY tests/OrderTracker.ArchitectureTests/OrderTracker.ArchitectureTests.csproj tests/OrderTracker.ArchitectureTests/
 RUN dotnet restore OrderTracker.sln
 COPY . .
 

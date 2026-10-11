@@ -24,15 +24,16 @@ A resubmit still returns the existing order after its status has changed (for ex
 confirmed or cancelled). The reference stays used for good.
 
 **Checked in the database, in two layers.**
-1. `PostgresOrderRepository.AddIfReferenceIsNewAsync` first looks the normalized reference up in the database.
+1. `SubmitOrderHandler` first looks the normalized reference up through the repository.
    This catches the common case, a rep resubmitting seconds or days later.
 2. Two identical requests arriving at the same moment can both pass that lookup. So the insert relies on the
-   **unique index** `ux_orders_normalized_reference`. The losing request gets a unique-violation error
-   (`23505` on that index), clears its unit of work, reads the winning order and returns it as a replay. The
-   rep sees exactly what a later resubmission would show.
+   **unique index** `ux_orders_normalized_reference`. The losing request's unit of work gets a unique-violation
+   error (`23505` on that index) and raises `DuplicateReferenceException`. The handler then reads the winning order
+   and answers as a replay (or a conflict, if the content differs). The rep sees exactly what a later resubmission
+   would show.
 
-Tests cover this against real PostgreSQL: 20 parallel inserts in the repository, 20 parallel HTTP POSTs
-through the API, and a raw insert that bypasses the repository to show the index itself rejects the duplicate.
+Tests cover this against real PostgreSQL (20 parallel submissions through the handler, 20 parallel HTTP POSTs,
+and the unit of work reporting the index violation), plus deterministic unit tests of the race path.
 In the Docker stack, 25 simultaneous `curl` requests produced one `201`, twenty-four `200`s and one row.
 
 **The frontend helps too.** The form generates a reference (`PO-YYYYMMDD-XXXX`) when it opens and
@@ -63,7 +64,7 @@ retrying with the same reference won't create a duplicate.
 
 ## Status changes
 
-A small state machine in `OrderStatusRules`:
+A small state machine in `OrderStatusPolicy`, enforced by the `Order` aggregate:
 
 ```
 Pending ──► Confirmed ──► Fulfilled
@@ -78,20 +79,75 @@ Pending ──► Confirmed ──► Fulfilled
   *Confirm* doesn't become an error.
 - Each order response includes `allowedTransitions`. The UI only offers valid actions and doesn't duplicate the rules.
 - Every change is recorded in `statusHistory` with a timestamp.
-- Concurrent changes use **optimistic concurrency**: orders are immutable records with a `Version`. An update
-  succeeds only if the version is unchanged, and otherwise the service re-reads and re-validates. A test races
+- Concurrent changes use **optimistic concurrency**: every change bumps the aggregate's `Version`. A save
+  succeeds only if the stored version is unchanged, and otherwise the handler re-loads and re-validates. A test races
   *Fulfil* against *Cancel* and checks that exactly one wins and the history stays consistent.
 
-## Architecture
+## Architecture: DDD with Clean Architecture
 
 ```
-Endpoints (HTTP)  →  OrderService (use cases)  →  IOrderRepository  →  PostgresOrderRepository (EF Core)  →  PostgreSQL
-                           │
-                    Domain: Order, OrderStatusRules, Pricing, OrderDraft (pure C#, no ASP.NET, no EF)
+            ┌──────────────────────────────────────────────┐
+            │ Api            endpoints, request contracts,  │  composition root
+            │                Error → ProblemDetails (code)   │
+            └───────────────┬──────────────────┬───────────┘
+                            │                  │
+            ┌───────────────▼───────┐  ┌───────▼──────────────────────────┐
+            │ Application           │◄─┤ Infrastructure                   │
+            │ use-case handlers,    │  │ EF Core + PostgreSQL (repository, │
+            │ validator, DTOs,      │  │ unit of work, read queries,       │
+            │ ports, event handlers │  │ migrations), Frankfurter client   │
+            └───────────┬───────────┘  └──────────────────────────────────┘
+                        │
+            ┌───────────▼───────────┐
+            │ Domain                │  depends on nothing
+            │ Order aggregate,      │
+            │ value objects, events │
+            └───────────────────────┘
 ```
 
-- **Minimal APIs** in one project, with folders as layers. For an app this size, separate assemblies would be ceremony.
-- The domain logic is pure static functions or immutable records, so the important rules are unit-testable without mocks.
+Dependencies point inwards only, and `OrderTracker.ArchitectureTests` enforces it: the Domain references
+nothing (not even `Microsoft.Extensions`), the Application has no EF, ASP.NET or HTTP code, and the endpoints
+never touch persistence.
+
+**Domain (`OrderTracker.Domain`)**, the tactical DDD building blocks:
+- **Aggregate root `Order`.** All changes go through its methods (`Submit`, `ChangeStatus`, `ConvertCurrency`),
+  which keep the invariants true: totals are always derived from the lines, status follows
+  `OrderStatusPolicy`, the currency only changes while Pending and always re-prices from the submitted prices,
+  and every change appends history and bumps `Version`. Setters are private (an architecture test checks this).
+- **Entities inside the aggregate:** `OrderLine` (keeps current and base price), `OrderStatusChange`,
+  `OrderCurrencyChange`. They're created and changed only by the order.
+- **Value objects** with validating factories: `OrderId` (strongly typed), `ExternalReference` (display value
+  plus normalized key, equal when the keys match), `EmailAddress`, `CustomerInfo`, `CurrencyCode`, `ExchangeRate`.
+- **Domain events:** `OrderSubmitted`, `OrderStatusChanged`, `OrderCurrencyConverted`. They're raised by the
+  aggregate and dispatched only after a successful commit.
+- **Expected failures are values, not exceptions:** `Result`/`Result<T>` with an `Error` that carries a
+  stable `code` (see below). `DomainException` is reserved for programming errors (e.g. a line with
+  quantity 0 that bypassed validation).
+- **`IOrderRepository`** lives with the aggregate it stores.
+
+**Application (`OrderTracker.Application`)**: one handler per use case (`SubmitOrderHandler`,
+`ChangeOrderStatusHandler`, `ConvertOrderCurrencyHandler`, `GetOrderHandler`, `ListOrdersHandler`, plus
+currency and rate queries), each behind `ICommandHandler`/`IQueryHandler`.
+- **Ports** for the outside world: `IUnitOfWork`, `IOrderQueries` (read side), `IExchangeRateProvider`.
+- **CQRS-lite:** commands load and save whole aggregates through the repository; queries read DTOs straight
+  from the store, with the list projected in SQL.
+- **Validation:** `SubmitOrderValidator` reports every field error at once, keyed by JSON path. It reuses the
+  value objects' rules, so each rule is written once.
+- **Event handling:** `OrderActivityLogger` handles the domain events, and the handlers log replays,
+  conflicts, lost races and rejected transitions.
+- MediatR isn't used: it's commercially licensed now, and a handler per use case injected directly is just as clear.
+
+**Infrastructure (`OrderTracker.Infrastructure`)**: EF Core maps the aggregate directly. Value objects become
+owned columns or converted values, and child entities become owned tables, so there's no separate persistence
+model to keep in sync. The schema is identical to before the restructure, and EF confirmed no migration was needed.
+- `UnitOfWork` commits, translates `23505` on the reference index into `DuplicateReferenceException` and a
+  stale `version` into `ConcurrencyConflictException`, then dispatches domain events.
+
+**Api (`OrderTracker.Api`)**: endpoints translate the request, call a handler and map the `Result`. A single
+`ToProblem()` turns every `Error` into ProblemDetails with its `code`, so the error format is consistent by
+construction.
+
+Other choices:
 - `TimeProvider` is injected, so tests control the clock (ordering and timestamp tests are deterministic).
 - Listing sorts by `createdAt` descending, with the sequential order number as tie-breaker. Orders created
   in the same tick still come out newest first.
@@ -100,11 +156,28 @@ Endpoints (HTTP)  →  OrderService (use cases)  →  IOrderRepository  →  Pos
 - **Angular**: standalone components, signals for state, typed reactive forms, zoneless (the v21 default).
   The UI is deliberately plain CSS with no component library.
 
+## Error codes
+
+Every error response is RFC 9457 ProblemDetails with a stable `code`, so clients can branch on it without
+parsing messages:
+
+| Code | HTTP | When |
+|---|---|---|
+| `validation_failed` | 400 | One or more fields invalid (`errors` keyed by JSON path) |
+| `request.malformed` | 400 | Body isn't valid JSON |
+| `order.not_found` | 404 | Unknown order id |
+| `order.reference.conflict` | 409 | Reference reused with different details (`existingOrderId`, `existingOrderNumber`) |
+| `order.status.invalid_transition` | 409 | Move not allowed (`currentStatus`, `requestedStatus`, `allowedTransitions`) |
+| `order.status.final` | 409 | Order is Fulfilled or Cancelled |
+| `order.currency.locked` | 409 | Currency change on a non-Pending order |
+| `exchange_rate.not_available` | 422 | No rate for that currency pair |
+| `exchange_rate.unavailable` | 503 | Rate source down and no usable cached rates |
+
 ## Persistence (PostgreSQL)
 
-- **EF Core 10 + Npgsql**, with snake_case naming. Persistence entities are separate from the immutable domain
-  records, and `OrderMapping` converts between them, so the domain has no EF attributes and the schema can evolve
-  independently.
+- **EF Core 10 + Npgsql**, with snake_case naming. EF maps the `Order` aggregate directly with fluent
+  configuration in Infrastructure (owned value objects, owned child tables, backing fields), so the domain has
+  no EF attributes or references.
 - **Schema.** `orders` has one row per order with its current state. `order_lines` keeps each line's current and
   original (base) price. `order_status_changes` and `order_currency_changes` are append-only history.
   - Order numbers come from an identity column. A failed insert can use up a number, so gaps are possible; that's
@@ -114,7 +187,7 @@ Endpoints (HTTP)  →  OrderService (use cases)  →  IOrderRepository  →  Pos
     so bad data can't get in even around the API.
 - **Optimistic concurrency.** `orders.version` is an EF concurrency token, so updates run as
   `UPDATE … WHERE id = @id AND version = @expected`. If another request committed first, the update affects no
-  rows, EF throws, and the repository reports a conflict. The service then re-reads and re-checks the rules.
+  rows, EF throws, and the unit of work reports a conflict. The handler then re-loads and re-checks the rules.
   New history rows are written in the same transaction, so a losing writer's history is rolled back too.
 - **Timestamps** are truncated to microseconds before saving (PostgreSQL's precision), so an order returned
   straight after a write is identical to the same order read back later.
@@ -172,25 +245,35 @@ changes an order.
 | 409 on reference reuse with different data | Safer than silently ignoring changes, but the rep must pick a new reference. | Possibly an explicit "amend order" flow while it's still Pending. |
 | No auth | Out of scope for the timebox. | Company SSO (OIDC), recording who submitted and who changed status. |
 | Server-side search + status filter, max 200 per page | Enough for the demo. The UI loads one page. | Pagination controls in the UI and date-range filters. |
+| Clean Architecture with four projects | Clear boundaries the compiler and architecture tests enforce; more projects to navigate for a small app. | Split further by bounded context (e.g. pricing, fulfilment) only when a second context appears. |
 | Frontend tests are light | The backend tests cover the business rules. The Angular tests cover the API client's 200/201 handling and error mapping. | Component tests for the form and a Playwright E2E test of the resubmit flow. |
 
 ## Testing
 
-`dotnet test` runs 102 tests (79 unit tests and 23 against real PostgreSQL):
+`dotnet test` runs 153 tests in four projects (Docker is needed for the 23 PostgreSQL tests):
 
-- **OrderStatusRulesTests**: every allowed and rejected transition, final states, messages, strict status parsing.
-- **CreateOrderValidatorTests**: quantity, price and decimal rules, required fields, error paths, normalization.
-- **PricingTests**: line totals, exact decimal sums, rounding mode.
-- **OrderServiceTests** (against an in-memory fake repository): totals on create, duplicate vs conflict, case and whitespace normalization, parallel
-  submissions creating exactly one order, newest-first listing (including ties), filtering and paging,
-  status flow and history, no-op status changes, racing status changes.
-- **CurrencyTests**: conversion maths and rounding, converting back to the base currency, the Pending-only rule,
-  missing rates and provider outages, the cache window and stale fallback, and parsing of Frankfurter responses
-  (with a stubbed HTTP handler, so there are no network calls).
-- **PostgresOrderRepositoryTests** (Testcontainers): every field and history row survives a save and reload,
-  duplicate references, 20 concurrent inserts producing one row, the unique index and check constraints
-  enforced by the database itself, optimistic concurrency (stale versions, racing updates), newest-first
-  listing with paging, status filter, case-insensitive search, and `%`/`_` treated literally.
-- **OrdersApiTests** (`WebApplicationFactory` + Testcontainers): the HTTP contract end to end on a real database
-  (201/200/409/400/404, the replay header, problem details, malformed JSON, currency endpoints), 20 simultaneous
-  identical POSTs creating one order, and the database health check.
+- **Domain.UnitTests (73)**: the `Order` aggregate (totals, history, events, guards that throw on invalid
+  lines, status changes and their coded errors, currency conversion, no compounding rounding, locking),
+  `OrderStatusPolicy` (every transition), value objects, pricing and rounding, and the submission fingerprint.
+  The fingerprint tests include a pinned value, computed independently, that guarantees stored fingerprints keep
+  matching, plus each material difference (quantity, price, line order, SKU case, notes, currency, customer).
+- **Application.UnitTests (47)**: every use case against an in-memory store (`TestKit`):
+  - submit outcomes, case and whitespace matching, formatting-only differences;
+  - **the race path** (another request wins between lookup and save) for both identical and different content;
+  - status changes, including retry after a concurrency conflict;
+  - currency conversion (rates, outages, missing rates, locking);
+  - listing (newest first, ties, filters, paging, clamping);
+  - the exchange-rate cache and stale fallback;
+  - validator boundaries (lengths, 100/101 lines, price and quantity limits).
+- **IntegrationTests (26)**:
+  - **PersistenceTests:** the real DI container on PostgreSQL. An aggregate saved and reloaded equals what the
+    API returned. 20 concurrent submissions store one row. The unit of work reports the unique-index violation.
+    Check constraints hold. A stale version is rejected. Racing fulfil and cancel let exactly one win with
+    consistent history. Listing, case-insensitive search and literal `%`/`_`.
+  - **ApiTests:** the HTTP contract including the stable codes, the exact JSON property names the frontend uses,
+    20 simultaneous POSTs and the health check.
+  - **FrankfurterExchangeRateProviderTests:** with a stubbed HTTP handler.
+- **ArchitectureTests (7)**: the dependency rule for each layer (with a control test, so the rules can't pass
+  vacuously) and no public setters in the domain.
+
+`dotnet test --filter "Category!=Database"` runs everything except the PostgreSQL tests, without Docker.
