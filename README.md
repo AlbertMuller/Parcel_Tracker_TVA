@@ -3,7 +3,8 @@
 A small internal app for recording customer purchase orders and tracking their status. Submitting the
 same order reference twice never creates a duplicate.
 
-- **Backend:** ASP.NET Core minimal API (.NET 10), in-memory storage, xUnit tests
+- **Backend:** ASP.NET Core minimal API (.NET 10), PostgreSQL 17 via EF Core with migrations, xUnit tests
+- **Database:** PostgreSQL in Docker, created by an init script, with the schema applied by a one-shot migration container
 - **Frontend:** Angular 21 (standalone components, signals, reactive forms)
 
 See [SOLUTION.md](SOLUTION.md) for design decisions and trade-offs.
@@ -15,12 +16,21 @@ See [SOLUTION.md](SOLUTION.md) for design decisions and trade-offs.
 | .NET SDK | 10.0.401 or a later 10.0.4xx patch (pinned in [backend/global.json](backend/global.json)) |
 | Node.js | 20.19+, 22.12+ or 24+ |
 | npm | 10+ |
+| Docker | With Compose v2: runs PostgreSQL, and the database tests use it via Testcontainers |
 
 ## Run locally
 
-Open two terminals from the repository root.
+**0. Database.** Start just PostgreSQL in Docker (on host port 5433):
 
-**1. API** (http://localhost:5080, Swagger UI at http://localhost:5080/swagger)
+```bash
+docker compose up -d db
+```
+
+Then open two terminals from the repository root.
+
+**1. API** (http://localhost:5080, Swagger UI at http://localhost:5080/swagger). In Development it applies any
+pending migrations on startup, using the connection strings in
+[appsettings.Development.json](backend/src/OrderTracker.Api/appsettings.Development.json).
 
 ```bash
 cd backend
@@ -38,7 +48,7 @@ npm start
 Open http://localhost:4200. The Angular dev server proxies `/api` to the API on port 5080
 ([proxy.conf.json](frontend/proxy.conf.json)), so no CORS setup is needed.
 
-Data is kept in memory and resets when the API restarts.
+Orders are stored in PostgreSQL and survive restarts. To start over, run `docker compose down -v`, which deletes the database volume.
 
 ## Run with Docker
 
@@ -53,24 +63,38 @@ docker compose up --build -d
 | http://localhost:8080 | Web app (nginx serving the Angular build, proxying `/api` to the API container) |
 | http://localhost:8081/swagger | API Swagger UI (`/health` for the health check) |
 
-Change the host ports with `WEB_PORT` / `API_PORT`, e.g. `WEB_PORT=9000 docker compose up -d`.
-Stop with `docker compose down`. Data is in memory, so it resets when the API container restarts.
+Change the host ports with `WEB_PORT` / `API_PORT` / `DB_PORT`, e.g. `WEB_PORT=9000 docker compose up -d`.
+Stop with `docker compose down`. Data lives in the `pgdata` volume and survives restarts;
+`docker compose down -v` deletes it.
+
+Database credentials have development defaults. To change them, copy [.env.example](.env.example) to `.env`.
+Role passwords are applied only when the volume is first created.
+
+Start-up order: **db** (healthy) → **migrate** (applies migrations, exits 0) → **api** (healthy, including a database check) → **web**.
 
 The setup:
 
+- **Database** (`postgres:17-alpine`): on first start, [docker/postgres/init/01-create-roles.sh](docker/postgres/init/01-create-roles.sh)
+  creates two logins. `ordertracker_migrator` owns the schema. `ordertracker_app` is what the API uses: it can read,
+  insert and update orders, but it can't change the schema or delete rows.
+- **Migrate**: the API image run as `dotnet OrderTracker.Api.dll migrate`. It applies EF Core migrations as the
+  migrator role and exits. Running it again is safe: it reports "schema is up to date".
 - **API** ([backend/Dockerfile](backend/Dockerfile)): built with the .NET SDK 10.0.401 image and run
   on `aspnet:10.0` as a non-root user. It has a health check on `/health`, and Swagger is turned on via `Swagger__Enabled=true`.
 - **Web** ([frontend/Dockerfile](frontend/Dockerfile)): built with Node 24, served by unprivileged nginx on port 8080.
   It handles SPA deep links and caches hashed assets long-term. The API address is set by `API_UPSTREAM` (default `http://api:8080`).
 - The web container starts only after the API reports healthy. The browser talks to a single origin, so no CORS is needed.
-- Run the backend tests inside the build image with `docker build --target test backend`.
+- Run the backend unit tests inside the build image with `docker build --target test backend` (the database tests need Docker, so they're skipped there).
 
 ## Run the tests
 
 ```bash
-# Backend: unit tests for business rules + HTTP integration tests
+# Backend: unit tests + PostgreSQL tests (Docker must be running; Testcontainers starts a throwaway Postgres)
 cd backend
 dotnet test
+
+# Backend unit tests only (no Docker needed)
+dotnet test --filter "Category!=Database"
 
 # Frontend (optional): Vitest unit tests
 cd frontend
@@ -122,6 +146,25 @@ Pending ──► Confirmed ──► Fulfilled
    └────────────┴──► Cancelled        (Fulfilled and Cancelled are final)
 ```
 
+## Database
+
+Tables: `orders`, `order_lines`, `order_status_changes` and `order_currency_changes`, with snake_case names.
+Status and currency history are append-only. A unique index on `orders.normalized_reference` is the final
+guard against duplicate orders. Check constraints enforce positive quantities, non-negative prices, valid
+statuses and currency codes.
+
+Migrations live in [backend/src/OrderTracker.Api/Infrastructure/Persistence/Migrations](backend/src/OrderTracker.Api/Infrastructure/Persistence/Migrations).
+To change the schema:
+
+```bash
+cd backend
+dotnet tool restore
+dotnet ef migrations add <Name> --project src/OrderTracker.Api --output-dir Infrastructure/Persistence/Migrations
+dotnet ef migrations script --project src/OrderTracker.Api --idempotent   # review the SQL
+```
+
+To connect with psql: `docker compose exec db psql -U postgres -d ordertracker`.
+
 ## Project layout
 
 ```
@@ -130,10 +173,11 @@ backend/
   src/OrderTracker.Api/
     Domain/           Order, status rules, pricing, normalization  (pure, no ASP.NET)
     Application/      OrderService (use cases), CreateOrderValidator
-    Infrastructure/   In-memory repository, bad-request handler
+    Infrastructure/   Persistence/ (EF Core DbContext, Postgres repository, migrations), exchange rates, error handling
     Contracts/        Request / response DTOs
     Endpoints/        HTTP mapping (status codes, problem details)
-  tests/OrderTracker.Tests/
+  tests/OrderTracker.Tests/   Unit tests (in-memory fake repository) and Postgres/ tests (Testcontainers)
+docker/postgres/init/        Database init script (roles and privileges)
 frontend/
   src/app/orders/     list, form and detail pages, API client, models
   src/app/shared/     status badge, error helper

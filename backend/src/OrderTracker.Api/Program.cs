@@ -3,6 +3,7 @@ using OrderTracker.Api.Application;
 using OrderTracker.Api.Endpoints;
 using OrderTracker.Api.Infrastructure;
 using OrderTracker.Api.Infrastructure.ExchangeRates;
+using OrderTracker.Api.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,13 +13,14 @@ builder.Services.AddExceptionHandler<BadRequestExceptionHandler>();
 builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
-builder.Services.AddHealthChecks();
+// Healthy only when the database is reachable, so Compose won't route traffic to an API that can't serve it.
+builder.Services.AddHealthChecks().AddDbContextCheck<OrdersDbContext>("database");
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IOrderRepository, InMemoryOrderRepository>();
-builder.Services.AddSingleton<OrderService>();
+builder.Services.AddOrdersDatabase(builder.Configuration);
+builder.Services.AddScoped<OrderService>();
 
 // Live exchange rates (ECB via Frankfurter), cached by ExchangeRateService.
 var exchangeRateSection = builder.Configuration.GetSection(ExchangeRateOptions.Section);
@@ -38,6 +40,16 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.WithOrigins(allowedOrigi
     .WithExposedHeaders(OrderEndpoints.ReplayHeader, "Location")));
 
 var app = builder.Build();
+
+// `dotnet OrderTracker.Api.dll migrate` applies migrations and exits (used by the Compose "migrate" service).
+// Database:MigrateOnStartup (on in Development) applies them before serving instead.
+if (args.Contains("migrate", StringComparer.OrdinalIgnoreCase))
+{
+    await DatabaseSetup.MigrateAsync(app.Configuration, app.Logger);
+    return;
+}
+if (app.Configuration.GetValue<bool>("Database:MigrateOnStartup"))
+    await DatabaseSetup.MigrateAsync(app.Configuration, app.Logger);
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();

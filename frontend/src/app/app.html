@@ -1,26 +1,92 @@
 <a class="skip-link" href="#main-content" (click)="$event.preventDefault(); mainContent.focus()"
   >Skip to content</a
 >
-<header class="topbar">
-  <a class="brand" routerLink="/orders"
-    ><span class="brand-icon" aria-hidden="true"
-      ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-        <path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z M3 8l9 5 9-5 M12 13v8 M7.5 5.5l9 5v4" /></svg></span
-    ><span>Order Tracker<span class="brand-caption">OPERATIONS WORKSPACE</span></span></a
-  >
+<aside class="sidebar" aria-label="Workspace sidebar">
+  <div class="sidebar-heading">
+    <a class="brand" routerLink="/orders" aria-label="Order Tracker home" title="Order Tracker">
+      <span class="brand-icon" aria-hidden="true"
+        ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z M3 8l9 5 9-5 M12 13v8 M7.5 5.5l9 5v4" /></svg
+      ></span>
+      <span class="brand-text"
+        >Order Tracker<span class="brand-caption">OPERATIONS WORKSPACE</span></span
+      >
+    </a>
+    <button
+      type="button"
+      class="theme-toggle"
+      (click)="toggleTheme()"
+      [attr.aria-pressed]="darkMode()"
+      aria-label="Dark mode"
+      [title]="darkMode() ? 'Switch to light mode' : 'Switch to dark mode'"
+    >
+      @if (darkMode()) {
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="4" />
+          <path
+            d="M12 2v2 M12 20v2 M2 12h2 M20 12h2 M5 5l1.5 1.5 M17.5 17.5 19 19 M5 19l1.5-1.5 M17.5 6.5 19 5"
+          />
+        </svg>
+      } @else {
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          aria-hidden="true"
+        >
+          <path d="M20.5 14A9 9 0 0 1 10 3.5 9 9 0 1 0 20.5 14Z" />
+        </svg>
+      }
+    </button>
+  </div>
+  <div class="nav-section-label">WORKSPACE</div>
   <nav aria-label="Main navigation">
     <a
       routerLink="/orders"
       routerLinkActive="active"
       ariaCurrentWhenActive="page"
       [routerLinkActiveOptions]="{ exact: true }"
-      >Orders</a
+      aria-label="Orders"
+      title="Orders"
     >
-    <a routerLink="/orders/new" routerLinkActive="active" ariaCurrentWhenActive="page">New order</a>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.7"
+        aria-hidden="true"
+      >
+        <rect x="4" y="3" width="16" height="18" rx="3" />
+        <path d="M8 8h8 M8 12h8 M8 16h5" /></svg
+      ><span class="nav-text">Orders</span>
+    </a>
+    <a
+      routerLink="/orders/new"
+      routerLinkActive="active"
+      ariaCurrentWhenActive="page"
+      aria-label="New order"
+      title="New order"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.7"
+        aria-hidden="true"
+      >
+        <rect x="4" y="4" width="16" height="16" rx="3" />
+        <path d="M12 8v8 M8 12h8" /></svg
+      ><span class="nav-text">New order</span>
+    </a>
   </nav>
-  <span class="workspace-label">Purchase order management</span>
-</header>
-<main #mainContent id="main-content" class="container" tabindex="-1"><router-outlet /></main>
-<footer class="site-footer">
-  <span>Order Tracker</span><span>From purchase to fulfilment.</span>
-</footer>
+</aside>
+<div class="workspace-content">
+  <main #mainContent id="main-content" class="container" tabindex="-1"><router-outlet /></main>
+</div>

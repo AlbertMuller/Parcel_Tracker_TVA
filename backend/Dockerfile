@@ -10,8 +10,9 @@ RUN dotnet restore OrderTracker.sln
 COPY . .
 
 # ---- test: optional, run with `docker build --target test backend` ----
+# Database tests need Docker (Testcontainers), so only the unit tests run inside the build.
 FROM build AS test
-RUN dotnet test OrderTracker.sln --no-restore
+RUN dotnet test OrderTracker.sln --no-restore --filter "Category!=Database"
 
 # ---- publish ----
 FROM build AS publish

@@ -1,15 +1,57 @@
 name: order-tracker
 
+# Development defaults. Override any of these in a .env file next to this one (see .env.example).
+x-db-env: &db-env
+  POSTGRES_DB: ${POSTGRES_DB:-ordertracker}
+  MIGRATOR_DB_USER: ${MIGRATOR_DB_USER:-ordertracker_migrator}
+  MIGRATOR_DB_PASSWORD: ${MIGRATOR_DB_PASSWORD:-migrator_dev_password}
+  APP_DB_USER: ${APP_DB_USER:-ordertracker_app}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:-app_dev_password}
+
 services:
-  api:
+  db:
+    image: postgres:17-alpine
+    environment:
+      <<: *db-env
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres_dev_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs only on first start with an empty volume: creates the migrator and app roles.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${DB_PORT:-5433}:5432"   # for local `dotnet run` and DB tools
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # One-shot: applies EF Core migrations as the schema owner, then exits.
+  migrate:
     build:
       context: ./backend
+    image: order-tracker-api:latest
+    command: ["migrate"]
+    environment:
+      ConnectionStrings__OrdersMigrations: Host=db;Database=${POSTGRES_DB:-ordertracker};Username=${MIGRATOR_DB_USER:-ordertracker_migrator};Password=${MIGRATOR_DB_PASSWORD:-migrator_dev_password};GSS Encryption Mode=Disable
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
     image: order-tracker-api:latest
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       Swagger__Enabled: "true"
+      ConnectionStrings__Orders: Host=db;Database=${POSTGRES_DB:-ordertracker};Username=${APP_DB_USER:-ordertracker_app};Password=${APP_DB_PASSWORD:-app_dev_password};GSS Encryption Mode=Disable
     ports:
       - "${API_PORT:-8081}:8080"   # Swagger UI at http://localhost:8081/swagger
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   web:
@@ -24,3 +66,6 @@ services:
       api:
         condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  pgdata:

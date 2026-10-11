@@ -16,3 +16,6 @@ coverage/
 .DS_Store
 Thumbs.db
 .idea/
+
+# Local secrets for docker compose
+.env
